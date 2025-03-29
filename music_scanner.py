@@ -16,6 +16,7 @@ class MusicScanner:
         self.nml_handler = NMLHandler()
         self.supported_extensions = {'.mp3', '.wav', '.flac', '.m4a', '.aac'}
         self.progress_callback = None
+        self.cancel_scan_requested = False
         
         # Initialize mimetypes
         mimetypes.init()
@@ -29,6 +30,19 @@ class MusicScanner:
         """Set a callback function to report progress"""
         logger.debug("Setting progress callback")
         self.progress_callback = callback
+    
+    def cancel_scan(self):
+        """Request to cancel the current scanning operation"""
+        logger.info("Scan cancellation requested")
+        self.cancel_scan_requested = True
+    
+    def is_scan_canceled(self):
+        """Check if scan cancellation was requested"""
+        return self.cancel_scan_requested
+    
+    def reset_cancel_flag(self):
+        """Reset the cancellation flag"""
+        self.cancel_scan_requested = False
     
     def add_folder(self, folder_path):
         """Add a folder to scan for music files"""
@@ -78,18 +92,45 @@ class MusicScanner:
         """Scan all added folders for music files"""
         logger.info("Starting music scan...")
         self.tracks = []
+        self.cancel_scan_requested = False
         
         # First, count total files to scan for progress reporting
         total_files = 0
         music_files = []
         
+        # Update progress with initial status
+        if self.progress_callback:
+            self.progress_callback(0, "Starting file discovery...")
+        
         logger.info(f"Scanning {len(self.folders)} folders for music files...")
         for folder in self.folders:
+            if self.cancel_scan_requested:
+                logger.info("Scan canceled during file discovery phase")
+                return
+                
             logger.info(f"Scanning folder: {folder}")
+            
+            # Update progress with folder scanning status
+            if self.progress_callback:
+                self.progress_callback(0, f"Scanning folder: {folder}")
+                
             try:
                 for root, _, files in os.walk(folder):
+                    if self.cancel_scan_requested:
+                        logger.info("Scan canceled during file discovery phase")
+                        return
+                        
                     logger.debug(f"Checking directory: {root}")
+                    
+                    # Update progress with directory status
+                    if self.progress_callback:
+                        self.progress_callback(0, f"Scanning: {root}")
+                        
                     for file in files:
+                        if self.cancel_scan_requested:
+                            logger.info("Scan canceled during file discovery phase")
+                            return
+                            
                         file_path = os.path.join(root, file)
                         file_ext = os.path.splitext(file)[1].lower()
                         if file_ext in self.supported_extensions:
@@ -104,26 +145,51 @@ class MusicScanner:
             except Exception as e:
                 logger.error(f"Error scanning folder {folder}: {str(e)}", exc_info=True)
         
+        if self.cancel_scan_requested:
+            logger.info("Scan canceled after file discovery phase")
+            return
+            
         logger.info(f"Found {total_files} valid music files to process")
         
+        # Update progress with file count
+        if self.progress_callback:
+            self.progress_callback(0, f"Found {total_files} music files to process")
+            
         # Now process the files with progress updates
         processed_files = 0
         for file_path in music_files:
+            if self.cancel_scan_requested:
+                logger.info(f"Scan canceled after processing {processed_files} of {total_files} files")
+                return
+                
             try:
                 logger.debug(f"Processing file {processed_files + 1} of {total_files}: {file_path}")
+                
+                # Update progress before processing the file
+                if self.progress_callback and total_files > 0:
+                    progress_percent = int((processed_files / total_files) * 100)
+                    logger.debug(f"Progress: {progress_percent}%")
+                    # Pass additional info about current file and total files
+                    self.progress_callback(progress_percent, file_path, processed_files + 1, total_files)
+                
                 track = Track(file_path)
                 self.tracks.append(track)
                 logger.debug(f"Successfully processed: {file_path}")
                 logger.debug(f"Track details: Title='{track.title}', Artist='{track.artist}', BPM={track.bpm}")
+                
             except Exception as e:
                 logger.error(f"Error processing {file_path}: {str(e)}", exc_info=True)
             
             processed_files += 1
-            if self.progress_callback and total_files > 0:
-                progress_percent = int((processed_files / total_files) * 100)
-                logger.debug(f"Progress: {progress_percent}%")
-                self.progress_callback(progress_percent, file_path)
         
+        if self.cancel_scan_requested:
+            logger.info(f"Scan canceled after processing all files")
+            return
+            
+        # Final progress update
+        if self.progress_callback:
+            self.progress_callback(100, "Completed processing files", processed_files, total_files)
+            
         logger.info(f"Scan complete. Processed {processed_files} files.")
         logger.info(f"Successfully imported {len(self.tracks)} tracks.")
     

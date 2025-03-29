@@ -5,10 +5,11 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                            QTableWidget, QTableWidgetItem, QComboBox,
                            QSpinBox, QLineEdit, QMessageBox, QInputDialog,
                            QProgressDialog, QHeaderView, QMenu, QToolTip)
-from PyQt6.QtCore import Qt, QSize, QPoint
+from PyQt6.QtCore import Qt, QSize, QPoint, QTime, QTimer
 from PyQt6.QtGui import QIcon, QFont, QColor
 import os
 import traceback
+import time
 from music_scanner import MusicScanner
 from music_player import MusicPlayer
 
@@ -179,6 +180,9 @@ class DJMusicOrganizer(QMainWindow):
         self.is_playing = False
         self.all_tracks = []
         self.progress_dialog = None
+        self.scan_start_time = None
+        self.timer = QTimer()
+        self.timer.timeout.connect(self._update_progress_time)
         
     def add_music_folder(self):
         logger.debug("add_music_folder method called")
@@ -194,13 +198,23 @@ class DJMusicOrganizer(QMainWindow):
                 logger.error(f"Error adding folder: {str(e)}", exc_info=True)
                 self.show_error("Error adding folder", str(e))
     
-    def _update_progress(self, value, message):
-        """Update progress dialog with current status"""
-        logger.debug(f"Progress update: {value}% - {message}")
-        if self.progress_dialog:
-            self.progress_dialog.setValue(value)
-            self.progress_dialog.setLabelText(f"Processing: {os.path.basename(message)}")
-            QApplication.processEvents()  # Ensure UI updates
+    def _update_progress_time(self):
+        """Update the elapsed time on the progress dialog"""
+        if self.progress_dialog and self.scan_start_time:
+            elapsed = time.time() - self.scan_start_time
+            elapsed_str = time.strftime("%M:%S", time.gmtime(elapsed))
+            current_text = self.progress_dialog.labelText()
+            
+            # Extract the first line of the label text (the operation description)
+            lines = current_text.split('\n')
+            if len(lines) > 0:
+                operation_text = lines[0]
+                # Check if we already have a time display and replace it, otherwise add it
+                if "Elapsed time:" in current_text:
+                    time_text = f"\nElapsed time: {elapsed_str}"
+                    self.progress_dialog.setLabelText(f"{operation_text}{time_text}")
+                else:
+                    self.progress_dialog.setLabelText(f"{operation_text}\nElapsed time: {elapsed_str}")
     
     def scan_music(self):
         logger.debug("scan_music method called")
@@ -212,19 +226,34 @@ class DJMusicOrganizer(QMainWindow):
         try:
             # Create a progress dialog
             logger.debug("Creating progress dialog for music scan")
-            self.progress_dialog = QProgressDialog("Scanning music files...", "Cancel", 0, 100, self)
+            self.progress_dialog = QProgressDialog("Preparing to scan...", "Cancel", 0, 100, self)
             self.progress_dialog.setWindowTitle("Scanning Music")
             self.progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
             self.progress_dialog.setMinimumDuration(0)
+            self.progress_dialog.setAutoReset(False)
+            self.progress_dialog.setAutoClose(False)
             self.progress_dialog.setValue(0)
             self.progress_dialog.show()
+            
+            # Connect to canceled signal
+            self.progress_dialog.canceled.connect(self._cancel_scan)
             
             # Set progress callback
             self.music_scanner.set_progress_callback(self._update_progress)
             
+            # Start timer for elapsed time display
+            self.scan_start_time = time.time()
+            self.timer.start(1000)  # Update every second
+            
+            # Allow UI updates before starting the scan
+            QApplication.processEvents()
+            
             # Start scanning
             logger.debug(f"Starting scan of {len(self.music_scanner.folders)} folders")
             self.music_scanner.scan()
+            
+            # Stop timer
+            self.timer.stop()
             
             # Ensure progress dialog is closed
             if self.progress_dialog:
@@ -246,10 +275,23 @@ class DJMusicOrganizer(QMainWindow):
             )
         except Exception as e:
             logger.error(f"Error during music scan: {str(e)}", exc_info=True)
+            self.timer.stop()
             if self.progress_dialog:
                 self.progress_dialog.close()
                 self.progress_dialog = None
             self.show_error("Error scanning music", str(e))
+    
+    def _cancel_scan(self):
+        """Cancel the current scanning operation"""
+        logger.debug("Scan canceled by user")
+        self.statusBar().showMessage("Scan canceled by user")
+        self.music_scanner.cancel_scan()
+        
+        # Disable cancel button to prevent multiple clicks
+        if self.progress_dialog:
+            self.progress_dialog.setCancelButtonText("Canceling...")
+            self.progress_dialog.setCancelButton(None)  # Disable cancel button
+            self.progress_dialog.setLabelText("Canceling scan... This may take a moment.\nPlease wait.")
     
     def update_music_table(self, tracks):
         """Update the table with the provided tracks"""
@@ -669,6 +711,31 @@ class DJMusicOrganizer(QMainWindow):
         # Also log to console
         print(f"ERROR: {title} - {message}")
         print(traceback.format_exc())
+
+    def _update_progress(self, value, message, current=None, total=None):
+        """Update progress dialog with current status"""
+        logger.debug(f"Progress update: {value}% - {message}")
+        if self.progress_dialog:
+            self.progress_dialog.setValue(value)
+            
+            # Set the label text based on available information
+            if current is not None and total is not None:
+                # If we have current and total counts, show them in the dialog
+                elapsed_time = ""
+                if self.scan_start_time:
+                    elapsed = time.time() - self.scan_start_time
+                    elapsed_time = f"\nElapsed time: {time.strftime('%M:%S', time.gmtime(elapsed))}"
+                
+                self.progress_dialog.setLabelText(
+                    f"Processing: {os.path.basename(message)}\n"
+                    f"File {current} of {total} ({value}%){elapsed_time}"
+                )
+            else:
+                # Simple status message
+                self.progress_dialog.setLabelText(f"{message}")
+            
+            # This is critical to keep the UI responsive
+            QApplication.processEvents()  # Ensure UI updates
 
 if __name__ == "__main__":
     logger.info("Application starting")

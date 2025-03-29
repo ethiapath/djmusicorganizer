@@ -302,8 +302,12 @@ class Track:
         logger.debug(f"Calculating BPM for: {self.file_path}")
         try:
             # Use a very short segment to speed up calculation and avoid memory issues
-            y, sr = librosa.load(self.file_path, duration=30, offset=30, sr=22050)
-            tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
+            # Reduced duration from 30 to 15 seconds for faster analysis
+            y, sr = librosa.load(self.file_path, duration=15, offset=15, sr=22050, mono=True)
+            
+            # Use a more efficient BPM detection method
+            onset_env = librosa.onset.onset_strength(y=y, sr=sr)
+            tempo, _ = librosa.beat.beat_track(onset_envelope=onset_env, sr=sr)
             self.bpm = round(tempo, 1)
         except Exception as e:
             logger.warning(f"Could not calculate BPM for {self.file_path}: {str(e)}")
@@ -314,12 +318,16 @@ class Track:
         logger.debug(f"Calculating key for: {self.file_path}")
         try:
             # Use a very short segment to speed up calculation and avoid memory issues
-            y, sr = librosa.load(self.file_path, duration=20, offset=30, sr=22050)
+            # Reduced duration from 20 to 10 seconds for faster analysis
+            y, sr = librosa.load(self.file_path, duration=10, offset=15, sr=22050, mono=True)
+            
+            # Use chromagram for key detection (more efficient than tonnetz)
             chroma = librosa.feature.chroma_cqt(y=y, sr=sr)
-            key_raw = librosa.feature.tonnetz(y=librosa.effects.harmonic(y), sr=sr)
-            key_idx = np.argmax(np.mean(key_raw, axis=1))
+            chroma_avg = np.mean(chroma, axis=1)
+            key_idx = np.argmax(chroma_avg)
+            
             keys = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
-            self.key = keys[key_idx % 12]
+            self.key = keys[key_idx]
         except Exception as e:
             logger.warning(f"Could not calculate key for {self.file_path}: {str(e)}")
             self.key = "Unknown"
@@ -329,7 +337,10 @@ class Track:
         logger.debug(f"Calculating energy for: {self.file_path}")
         try:
             # Use a very short segment to speed up calculation and avoid memory issues
-            y, sr = librosa.load(self.file_path, duration=15, offset=30, sr=22050)
+            # Reduced duration from 15 to 10 seconds for faster analysis
+            y, sr = librosa.load(self.file_path, duration=10, offset=15, sr=22050, mono=True)
+            
+            # Compute RMS energy
             rms = librosa.feature.rms(y=y)
             self.energy = int(np.mean(rms) * 100)  # Scale to 0-100
         except Exception as e:
