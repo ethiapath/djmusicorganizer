@@ -1,3 +1,5 @@
+# WORK IN PROGRESS!!!
+
 # DJ Music Organizer
 
 A powerful music organization tool designed specifically for DJs to manage their music collection across multiple locations, including local folders and NAS drives.
