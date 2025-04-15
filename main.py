@@ -315,20 +315,14 @@ class DJMusicOrganizer(QMainWindow):
                     if track.is_corrupt:
                         status_item = QTableWidgetItem("Corrupted")
                         status_item.setForeground(QColor("red"))
-                        status_item.setToolTip(track.error_message)
+                        status_item.setToolTip(f"Corrupted: {track.error_message}")  # Show full error
                         
-                        # Also color the row slightly red
-                        title_item.setBackground(QColor(255, 220, 220))
-                        artist_item.setBackground(QColor(255, 220, 220))
-                        bpm_item.setBackground(QColor(255, 220, 220))
-                        key_item.setBackground(QColor(255, 220, 220))
-                        genre_item.setBackground(QColor(255, 220, 220))
-                        energy_item.setBackground(QColor(255, 220, 220))
+                        # Add corruption indicator to location column
+                        location_item = QTableWidgetItem(f"[CORRUPT] {track.file_path}")
+                        location_item.setForeground(QColor("red"))
                     else:
                         status_item = QTableWidgetItem("OK")
-                        status_item.setForeground(QColor("green"))
-                    
-                    location_item = QTableWidgetItem(track.file_path or "")
+                        location_item = QTableWidgetItem(track.file_path or "")
                     
                     self.music_table.setItem(i, 0, title_item)
                     self.music_table.setItem(i, 1, artist_item)
@@ -463,19 +457,23 @@ class DJMusicOrganizer(QMainWindow):
     def reveal_file(self, file_path):
         """Open file explorer to the file location"""
         try:
-            if os.path.exists(file_path):
-                # Get directory containing the file
-                directory = os.path.dirname(file_path)
-                
-                # Open file explorer to that directory
-                if sys.platform == 'win32':
-                    os.startfile(directory)
-                elif sys.platform == 'darwin':  # macOS
-                    os.system(f'open "{directory}"')
-                else:  # Linux
-                    os.system(f'xdg-open "{directory}"')
+            if not os.path.exists(file_path):
+                raise FileNotFoundError(f"Path not found: {file_path}")
+            # Get directory containing the file
+            directory = os.path.dirname(file_path)
+            
+            # Open file explorer to that directory
+            if sys.platform == 'win32':
+                os.startfile(directory)
+            elif sys.platform == 'darwin':  # macOS
+                os.system(f'open "{directory}"')
+            else:  # Linux
+                os.system(f'xdg-open "{directory}"')
         except Exception as e:
             self.show_error("Error revealing file", str(e))
+            self.current_track.is_corrupt = True
+            self.current_track.error_message = f"File location invalid: {str(e)}"
+            self.update_music_table(self.all_tracks)
     
     def play_track(self, track):
         """Play a track"""
@@ -596,7 +594,9 @@ class DJMusicOrganizer(QMainWindow):
                 reply = QMessageBox.question(
                     self,
                     "Include Corrupted Files",
-                    f"{corrupted_count} of {len(filtered_tracks)} selected tracks are corrupted. Include them anyway?",
+                    f"{corrupted_count} corrupted tracks selected.\n"
+                    "These will be unplayable in the playlist.\n"
+                    "Include them anyway?",
                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
                 )
                 
@@ -744,4 +744,4 @@ if __name__ == "__main__":
     logger.info("Main window created, showing UI")
     window.show()
     logger.info("Entering main application loop")
-    sys.exit(app.exec()) 
+    sys.exit(app.exec())

@@ -28,10 +28,19 @@ class Track:
         self.location = file_path  # Adding location property for the table
         self.is_corrupt = False
         self.error_message = ""
-        
-        # Load metadata
+        self._validate_file()  # Add this line before metadata loading
         self._load_metadata()
-    
+
+    def _validate_file(self):
+        """Check basic file validity before processing"""
+        if not os.path.exists(self.file_path):
+            self.is_corrupt = True
+            self.error_message = "File not found"
+        elif os.path.getsize(self.file_path) < 1024:  # 1KB minimum size
+            self.is_corrupt = True
+            self.error_message = "File too small to be valid audio"
+        # Keep existing corruption checks in _load_metadata
+
     def _load_metadata(self):
         """Load metadata from the audio file"""
         logger.debug(f"Loading metadata for: {self.file_path}")
@@ -364,4 +373,4 @@ class Track:
             'file_path': self.file_path,
             'is_corrupt': self.is_corrupt,
             'error_message': self.error_message
-        } 
+        }
