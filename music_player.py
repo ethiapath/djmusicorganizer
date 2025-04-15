@@ -48,16 +48,47 @@ class MusicPlayer:
         self.player.audio_set_volume(volume)
     
     def get_position(self):
-        """Get the current playback position (0-100)"""
-        return self.player.get_position() * 100
+        """Get the current playback position in seconds"""
+        if self.current_media is None:
+            return 0
+            
+        # Get position as a percentage (0-1)
+        pos_percentage = self.player.get_position()
+        
+        # Get total length in milliseconds
+        length_ms = self.player.get_length()
+        
+        # Convert to seconds
+        if length_ms > 0 and pos_percentage >= 0:
+            return (pos_percentage * length_ms) / 1000
+        return 0
     
-    def set_position(self, position):
-        """Set the playback position (0-100)"""
-        self.player.set_position(position / 100)
+    def set_position(self, position_seconds):
+        """Set the playback position in seconds"""
+        if self.current_media is None:
+            return
+            
+        # Get total length in milliseconds
+        length_ms = self.player.get_length()
+        
+        if length_ms > 0:
+            # Convert position in seconds to a percentage
+            pos_percentage = (position_seconds * 1000) / length_ms
+            # Clamp value between 0-1
+            pos_percentage = max(0, min(1, pos_percentage))
+            # Set position
+            self.player.set_position(pos_percentage)
     
     def get_length(self):
         """Get the total length of the current track in milliseconds"""
         return self.player.get_length()
+    
+    def get_duration(self):
+        """Get the total duration of the current track in seconds"""
+        length_ms = self.player.get_length()
+        if length_ms > 0:
+            return length_ms / 1000
+        return 0
     
     def is_playing(self):
         """Check if a track is currently playing"""

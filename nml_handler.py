@@ -104,16 +104,33 @@ class NMLHandler:
         collection = self.root.find("COLLECTION")
         if collection is not None:
             for entry in collection.findall("ENTRY"):
-                track = {
-                    'id': entry.get("ID"),
-                    'title': entry.find("TITLE").text,
-                    'artist': entry.find("ARTIST").text,
-                    'bpm': float(entry.find("TEMPO").get("BPM")),
-                    'key': entry.find("KEY").get("VALUE"),
-                    'file_path': entry.find("LOCATION").get("FILE"),
-                    'genre': entry.find("INFO").get("GENRE")
-                }
-                tracks.append(track)
+                try:
+                    # Safely get elements with fallbacks for missing nodes
+                    title_elem = entry.find("TITLE")
+                    artist_elem = entry.find("ARTIST")
+                    tempo_elem = entry.find("TEMPO")
+                    key_elem = entry.find("KEY")
+                    location_elem = entry.find("LOCATION")
+                    info_elem = entry.find("INFO")
+                    
+                    # Only proceed if we have the minimum required elements
+                    if location_elem is not None:
+                        track = {
+                            'id': entry.get("ID", str(uuid.uuid4())),
+                            'title': title_elem.text if title_elem is not None else "Unknown Title",
+                            'artist': artist_elem.text if artist_elem is not None else "Unknown Artist",
+                            'bpm': float(tempo_elem.get("BPM", "0")) if tempo_elem is not None else 0.0,
+                            'key': key_elem.get("VALUE", "") if key_elem is not None else "",
+                            'file_path': location_elem.get("FILE", ""),
+                            'genre': info_elem.get("GENRE", "") if info_elem is not None else ""
+                        }
+                        
+                        # Only add tracks with valid file paths
+                        if track['file_path']:
+                            tracks.append(track)
+                except Exception as e:
+                    print(f"Error processing track entry: {str(e)}")
+                    continue
         return tracks
     
     def get_playlists(self):
