@@ -315,6 +315,8 @@ class MusicScanner:
             tracks = self._read_rekordbox_xml(source_file)
         elif source_format == "csv":
             tracks = self._read_serato_csv(source_file)
+        elif source_format == "m3u":
+            tracks = self.read_m3u_playlist(source_file)
         
         if progress_callback:
             progress_callback(30, f"Processing {len(tracks)} tracks...", 30, 100)
@@ -368,6 +370,10 @@ class MusicScanner:
             self._write_rekordbox_xml(target_file, processed_tracks)
         elif target_format == "csv":
             self._write_serato_csv(target_file, processed_tracks)
+        elif target_format == "m3u":
+            self.write_m3u_playlist(target_file, processed_tracks, use_utf8=False)
+        elif target_format == "m3u8":
+            self.write_m3u_playlist(target_file, processed_tracks, use_utf8=True)
         
         if progress_callback:
             progress_callback(100, "Migration complete", 100, 100)
@@ -521,4 +527,142 @@ class MusicScanner:
                     })
         except Exception as e:
             logger.error(f"Error writing Serato CSV: {str(e)}")
+            raise
+            
+    def read_m3u_playlist(self, file_path):
+        """Read tracks from M3U or M3U8 playlist file"""
+        logger.info(f"Reading M3U playlist: {file_path}")
+        try:
+            tracks = []
+            
+            # Determine base directory for resolving relative paths
+            base_dir = os.path.dirname(file_path)
+            
+            with open(file_path, 'r', encoding='utf-8' if file_path.lower().endswith('.m3u8') else 'latin-1') as f:
+                lines = f.readlines()
+                
+                current_title = None
+                for line in lines:
+                    line = line.strip()
+                    
+                    # Skip empty lines and comments
+                    if not line or line.startswith('#'):
+                        # Extract title from EXTINF tag if present
+                        if line.startswith('#EXTINF:'):
+                            # Format: #EXTINF:duration,title
+                            parts = line.split(',', 1)
+                            if len(parts) > 1:
+                                current_title = parts[1].strip()
+                        continue
+                    
+                    # Process file path
+                    track_path = line
+                    
+                    # Handle relative paths
+                    if not os.path.isabs(track_path):
+                        track_path = os.path.join(base_dir, track_path)
+                        
+                    # Normalize path (handle ../ etc.)
+                    track_path = os.path.normpath(track_path)
+                    
+                    # Check if the file exists and is a music file
+                    if os.path.exists(track_path) and self.is_music_file(track_path):
+                        try:
+                            track = Track(track_path)
+                            # If we found a title in EXTINF, use it
+                            if current_title:
+                                track.title = current_title
+                                current_title = None
+                            tracks.append(track)
+                            logger.debug(f"Added track from M3U: {track_path}")
+                        except Exception as e:
+                            logger.error(f"Error loading track {track_path}: {str(e)}")
+                    else:
+                        logger.warning(f"File not found or not a music file: {track_path}")
+            
+            logger.info(f"Loaded {len(tracks)} tracks from M3U playlist")
+            return tracks
+        except Exception as e:
+            logger.error(f"Error reading M3U playlist: {str(e)}")
+            raise
+            
+    def write_m3u_playlist(self, file_path, tracks, use_utf8=True):
+        """Write tracks to M3U or M3U8 playlist format"""
+        logger.info(f"Writing M3U playlist: {file_path}")
+        try:
+            # Determine if we should use UTF-8 (M3U8) or Latin-1 (M3U) encoding
+            if use_utf8 or file_path.lower().endswith('.m3u8'):
+                encoding = 'utf-8'
+                if not file_path.lower().endswith('.m3u8'):
+                    file_path = file_path + '.m3u8'
+            else:
+                encoding = 'latin-1'
+                if not file_path.lower().endswith('.m3u'):
+                    file_path = file_path + '.m3u'
+            
+            # Get base directory for making paths relative
+            base_dir = os.path.dirname(file_path)
+            
+            with open(file_path, 'w', encoding=encoding) as f:
+                # Write M3U header
+                f.write("#EXTM3U\n")
+                
+                for track in tracks:
+                    # Write extended info
+                    duration = 0  # We don't have actual duration info
+                    title = f"{track.artist} - {track.title}" if track.artist else track.title
+                    f.write(f"#EXTINF:{duration},{title}\n")
+                    
+                    # Try to make the path relative to the playlist location
+                    try:
+                        rel_path = os.path.relpath(track.file_path, base_dir)
+                        # If the relative path starts going up directories too much,
+                        # just use the absolute path
+                        if rel_path.startswith('..') and rel_path.count('..') > 2:
+                            f.write(f"{track.file_path}\n")
+                        else:
+                            f.write(f"{rel_path}\n")
+                    except:
+                        # Fallback to absolute path if there's any issue
+                        f.write(f"{track.file_path}\n")
+            
+            logger.info(f"Successfully wrote {len(tracks)} tracks to M3U playlist")
+            return file_path
+        except Exception as e:
+            logger.error(f"Error writing M3U playlist: {str(e)}")
+            raise
+    
+    def export_to_m3u(self, filepath):
+        """Export tracks to M3U/M3U8 playlist format"""
+        try:
+            # Determine if we should use UTF-8 (M3U8) or Latin-1 (M3U) encoding based on file extension
+            use_utf8 = filepath.lower().endswith('.m3u8')
+            return self.write_m3u_playlist(filepath, self.tracks, use_utf8)
+        except Exception as e:
+            logger.error(f"Error exporting to M3U/M3U8: {str(e)}")
+            raise
+    
+    def import_from_m3u(self, filepath):
+        """Import tracks from M3U/M3U8 playlist format"""
+        try:
+            imported_tracks = self.read_m3u_playlist(filepath)
+            
+            # Process each track, adding to the main tracks list
+            successful_tracks = 0
+            total_tracks = len(imported_tracks)
+            
+            for i, track in enumerate(imported_tracks):
+                try:
+                    self.tracks.append(track)
+                    successful_tracks += 1
+                except Exception as e:
+                    logger.error(f"Error importing track {track.file_path}: {str(e)}")
+                
+                if self.progress_callback:
+                    progress_percent = int((i + 1) / total_tracks * 100)
+                    self.progress_callback(progress_percent, f"Imported {successful_tracks} of {total_tracks}")
+            
+            logger.info(f"Successfully imported {successful_tracks} of {total_tracks} tracks from M3U/M3U8")
+        except Exception as e:
+            logger.error(f"Error importing from M3U/M3U8: {str(e)}")
             raise

@@ -70,11 +70,13 @@ class FormatMigrationDialog(QDialog):
         self.source_nml = QRadioButton("Traktor (NML)")
         self.source_xml = QRadioButton("Rekordbox (XML)")
         self.source_csv = QRadioButton("Serato (CSV)")
+        self.source_m3u = QRadioButton("M3U/M3U8 Playlist")
         self.source_nml.setChecked(True)
         
         source_layout.addWidget(self.source_nml)
         source_layout.addWidget(self.source_xml)
         source_layout.addWidget(self.source_csv)
+        source_layout.addWidget(self.source_m3u)
         source_group.setLayout(source_layout)
         layout.addWidget(source_group)
         
@@ -85,11 +87,15 @@ class FormatMigrationDialog(QDialog):
         self.target_nml = QRadioButton("Traktor (NML)")
         self.target_xml = QRadioButton("Rekordbox (XML)")
         self.target_csv = QRadioButton("Serato (CSV)")
+        self.target_m3u = QRadioButton("M3U Playlist")
+        self.target_m3u8 = QRadioButton("M3U8 Playlist (UTF-8)")
         self.target_xml.setChecked(True)
         
         target_layout.addWidget(self.target_nml)
         target_layout.addWidget(self.target_xml)
         target_layout.addWidget(self.target_csv)
+        target_layout.addWidget(self.target_m3u)
+        target_layout.addWidget(self.target_m3u8)
         target_group.setLayout(target_layout)
         layout.addWidget(target_group)
         
@@ -127,6 +133,8 @@ class FormatMigrationDialog(QDialog):
             return "xml"
         elif self.source_csv.isChecked():
             return "csv"
+        elif self.source_m3u.isChecked():
+            return "m3u"
         return "nml"  # Default
     
     def get_target_format(self):
@@ -136,6 +144,10 @@ class FormatMigrationDialog(QDialog):
             return "xml"
         elif self.target_csv.isChecked():
             return "csv"
+        elif self.target_m3u.isChecked():
+            return "m3u"
+        elif self.target_m3u8.isChecked():
+            return "m3u8"
         return "xml"  # Default
     
     def get_options(self):
@@ -182,6 +194,15 @@ class DJMusicOrganizer(QMainWindow):
         export_nml_btn = QPushButton("Export NML")
         export_nml_btn.clicked.connect(self.export_nml)
         toolbar.addWidget(export_nml_btn)
+        
+        # M3U import/export buttons
+        import_m3u_btn = QPushButton("Import M3U")
+        import_m3u_btn.clicked.connect(self.import_m3u)
+        toolbar.addWidget(import_m3u_btn)
+        
+        export_m3u_btn = QPushButton("Export M3U")
+        export_m3u_btn.clicked.connect(self.export_m3u)
+        toolbar.addWidget(export_m3u_btn)
         
         # Create playlist button
         create_playlist_btn = QPushButton("Create Playlist")
@@ -977,9 +998,12 @@ class DJMusicOrganizer(QMainWindow):
             return
         
         # Get source file
-        source_extensions = {"nml": "Traktor Files (*.nml)", 
-        "xml": "Rekordbox Files (*.xml)",
-        "csv": "Serato Files (*.csv)"}
+        source_extensions = {
+            "nml": "Traktor Files (*.nml)", 
+            "xml": "Rekordbox Files (*.xml)",
+            "csv": "Serato Files (*.csv)",
+            "m3u": "M3U Playlist Files (*.m3u *.m3u8)"
+        }
         
         source_file, _ = QFileDialog.getOpenFileName(
             self, f"Select {source_format.upper()} Source File", "", 
@@ -990,7 +1014,13 @@ class DJMusicOrganizer(QMainWindow):
             return
         
         # Get target file
-        target_extensions = {"nml": "nml", "xml": "xml", "csv": "csv"}
+        target_extensions = {
+            "nml": "nml", 
+            "xml": "xml", 
+            "csv": "csv",
+            "m3u": "m3u",
+            "m3u8": "m3u8"
+        }
         target_file, _ = QFileDialog.getSaveFileName(
         self, f"Save {target_format.upper()} Target File", "",
             f"{target_format.upper()} Files (*.{target_extensions.get(target_format)})"
@@ -1037,6 +1067,80 @@ class DJMusicOrganizer(QMainWindow):
                 self.progress_dialog.close()
                 self.progress_dialog = None
                 self.show_error("Migration Error", str(e))
+
+    def import_m3u(self):
+        """Import tracks from M3U/M3U8 playlist file"""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Import M3U/M3U8 Playlist File", "", "M3U/M3U8 Playlist Files (*.m3u *.m3u8)"
+        )
+        if file_path:
+            try:
+                # Create progress dialog
+                self.progress_dialog = QProgressDialog("Importing M3U/M3U8 playlist...", "Cancel", 0, 100, self)
+                self.progress_dialog.setWindowTitle("Importing")
+                self.progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
+                self.progress_dialog.setValue(0)
+                self.progress_dialog.show()
+                
+                # Set progress callback
+                self.music_scanner.set_progress_callback(self._update_progress)
+                
+                # Import the file
+                self.music_scanner.import_from_m3u(file_path)
+                
+                # Cleanup
+                if self.progress_dialog:
+                    self.progress_dialog.close()
+                    self.progress_dialog = None
+                
+                self.all_tracks = self.music_scanner.get_tracks()
+                self.update_music_table(self.all_tracks)
+                self.update_genre_filter()
+                
+                # Count corrupted files
+                corrupted_count = sum(1 for track in self.all_tracks if track.is_corrupt)
+                
+                self.statusBar().showMessage(
+                    f"Imported {len(self.all_tracks)} tracks from M3U/M3U8 playlist ({corrupted_count} corrupted)"
+                )
+            except Exception as e:
+                if self.progress_dialog:
+                    self.progress_dialog.close()
+                    self.progress_dialog = None
+                self.show_error("Error importing M3U/M3U8 playlist", str(e))
+
+    def export_m3u(self):
+        """Export tracks to M3U/M3U8 playlist file"""
+        if not self.all_tracks:
+            QMessageBox.warning(self, "Warning", "No tracks to export. Scan music files first.")
+            return
+            
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, "Export M3U/M3U8 Playlist File", "", "M3U/M3U8 Playlist Files (*.m3u *.m3u8)"
+        )
+        if file_path:
+            try:
+                # Create progress dialog
+                self.progress_dialog = QProgressDialog("Exporting to M3U/M3U8 playlist...", "Cancel", 0, 100, self)
+                self.progress_dialog.setWindowTitle("Exporting")
+                self.progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
+                self.progress_dialog.setValue(0)
+                self.progress_dialog.show()
+                
+                # Export the file
+                self.music_scanner.export_to_m3u(file_path)
+                
+                # Cleanup
+                self.progress_dialog.setValue(100)
+                self.progress_dialog.close()
+                self.progress_dialog = None
+                
+                self.statusBar().showMessage(f"Exported {len(self.all_tracks)} tracks to M3U/M3U8 playlist")
+            except Exception as e:
+                if self.progress_dialog:
+                    self.progress_dialog.close()
+                    self.progress_dialog = None
+                self.show_error("Error exporting M3U/M3U8 playlist", str(e))
 
 # Add this code to run the application
 if __name__ == "__main__":
