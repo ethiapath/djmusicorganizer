@@ -5,7 +5,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                            QTableWidget, QTableWidgetItem, QComboBox,
                            QSpinBox, QLineEdit, QMessageBox, QInputDialog,
                            QProgressDialog, QHeaderView, QMenu, QToolTip)
-from PyQt6.QtCore import Qt, QSize, QPoint, QTime, QTimer
+from PyQt6.QtCore import Qt, QSize, QPoint, QTime, QTimer, QThread, pyqtSignal
 from PyQt6.QtGui import QIcon, QFont, QColor
 import os
 import traceback
@@ -216,17 +216,44 @@ class DJMusicOrganizer(QMainWindow):
                 else:
                     self.progress_dialog.setLabelText(f"{operation_text}\nElapsed time: {elapsed_str}")
     
-    def scan_music(self):
-        logger.debug("scan_music method called")
-        if not self.music_scanner.folders:
-            logger.warning("No music folders added before scan attempt")
-            QMessageBox.warning(self, "Warning", "No music folders have been added. Add a folder first.")
-            return
+    # Add ScannerThread class before DJMusicOrganizer class (around line 25)
+    class ScannerThread(QThread):
+        progress_updated = pyqtSignal(int, str, int, int)
+        finished = pyqtSignal(list)
+        error_occurred = pyqtSignal(Exception)
+        
+        def __init__(self, scanner):
+            super().__init__()
+            self.scanner = scanner
+            self._is_running = True
             
+        def run(self):
+            try:
+                result = []
+                if self._is_running:
+                    self.scanner.scan(progress_callback=self._progress_wrapper, 
+                                    result_collector=result)
+                self.finished.emit(result[0] if result else [])
+            except Exception as e:
+                self.error_occurred.emit(e)
+                
+            def _progress_wrapper(self, value, message, current, total):
+                if self._is_running:
+                    self.progress_updated.emit(value, message, current, total)
+                    
+            def cancel(self):
+                self._is_running = False
+                self.scanner.cancel_scan()
+    
+    # Remove the duplicate import and class definition from inside DJMusicOrganizer class (around line 219-242)
+    def scan_music(self):
+        # Replace existing scan logic with:
+        if not self.music_scanner.folders:
+            QMessageBox.warning(self, "Warning", "Add a folder first.")
+            return
+        
         try:
-            # Create a progress dialog
-            logger.debug("Creating progress dialog for music scan")
-            self.progress_dialog = QProgressDialog("Preparing to scan...", "Cancel", 0, 100, self)
+            self.progress_dialog = QProgressDialog("Preparing...", "Cancel", 0, 100, self)
             self.progress_dialog.setWindowTitle("Scanning Music")
             self.progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
             self.progress_dialog.setMinimumDuration(0)
