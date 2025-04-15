@@ -4,6 +4,7 @@ import logging
 import traceback
 from track import Track
 from nml_handler import NMLHandler
+from nml_to_rekordbox import NMLToRekordboxConverter
 
 # Get logger for this module
 logger = logging.getLogger(__name__)
@@ -300,4 +301,250 @@ class MusicScanner:
             return self.nml_handler.get_playlists()
         except Exception as e:
             print(f"Error getting playlists: {str(e)}")
-            return [] 
+            return []
+    
+    # Add to MusicScanner class
+    def migrate_format(self, source_file, target_file, source_format, target_format, options, progress_callback=None):
+        """Migrate between different DJ software formats"""
+        if progress_callback:
+            progress_callback(0, f"Reading {source_format} file...", 0, 100)
+        
+        # Read source file
+        tracks = []
+        if source_format == "nml":
+            tracks = self._read_nml_file(source_file)
+        elif source_format == "xml":
+            tracks = self._read_rekordbox_xml(source_file)
+        elif source_format == "csv":
+            tracks = self._read_serato_csv(source_file)
+        
+        if progress_callback:
+            progress_callback(30, f"Processing {len(tracks)} tracks...", 30, 100)
+        
+        # Process tracks according to options
+        preserve_cues = options.get("preserve_cues", "Preserve all cue points")
+        handle_missing = options.get("handle_missing", "Skip missing files")
+        
+        processed_tracks = []
+        total = len(tracks) if tracks else 0
+        
+        for i, track in enumerate(tracks):
+            if progress_callback:
+                progress_callback(30 + (i / total * 40) if total > 0 else 50, 
+                                f"Processing track {i+1}/{total}", i+1, total)
+            
+            # Handle missing files
+            if not os.path.exists(track.file_path):
+                if handle_missing == "Skip missing files":
+                    continue
+                elif handle_missing == "Attempt to locate":
+                    # Try to find the file by name in known folders
+                    found = False
+                    for folder in self.folders:
+                        for root, _, files in os.walk(folder):
+                            if os.path.basename(track.file_path) in files:
+                                new_path = os.path.join(root, os.path.basename(track.file_path))
+                                track.file_path = new_path
+                                found = True
+                                break
+                        if found:
+                            break
+                    if not found and handle_missing == "Skip missing files":
+                        continue
+            
+            # Handle cue points
+            if preserve_cues == "Preserve only first 8 cues" and hasattr(track, 'cue_points'):
+                track.cue_points = track.cue_points[:8]
+            elif preserve_cues == "Skip cue points" and hasattr(track, 'cue_points'):
+                track.cue_points = []
+            
+            processed_tracks.append(track)
+        
+        if progress_callback:
+            progress_callback(70, f"Writing {target_format} file...", 70, 100)
+        
+        # Write target file
+        if target_format == "nml":
+            self._write_nml_file(target_file, processed_tracks)
+        elif target_format == "xml":
+            self._write_rekordbox_xml(target_file, processed_tracks)
+        elif target_format == "csv":
+            self._write_serato_csv(target_file, processed_tracks)
+        
+        if progress_callback:
+            progress_callback(100, "Migration complete", 100, 100)
+        
+        return processed_tracks
+
+def _read_nml_file(self, file_path):
+    """Read tracks from Traktor NML file"""
+    try:
+        # Use existing NML handler
+        self.nml_handler.load_nml(file_path)
+        nml_tracks = self.nml_handler.get_collection_tracks()
+        
+        # Convert NML tracks to Track objects
+        tracks = []
+        for nml_track in nml_tracks:
+            try:
+                file_path = nml_track['file_path']
+                if os.path.exists(file_path):
+                    track = Track(file_path)
+                    track.id = nml_track['id']
+                    # Copy any additional metadata from NML
+                    if 'cue_points' in nml_track:
+                        track.cue_points = nml_track['cue_points']
+                    tracks.append(track)
+            except Exception as e:
+                logger.error(f"Error importing track {nml_track.get('file_path', 'unknown')}: {str(e)}")
+        
+        return tracks
+    except Exception as e:
+        logger.error(f"Error reading NML file: {str(e)}")
+        raise
+
+def _write_nml_file(self, file_path, tracks):
+    """Write tracks to Traktor NML format"""
+    try:
+        self.nml_handler.create_new_nml()
+        
+        # Add all tracks to collection
+        for track in tracks:
+            track.id = self.nml_handler.add_track_to_collection(track)
+        
+        # Save the NML file
+        self.nml_handler.save_nml(file_path)
+    except Exception as e:
+        logger.error(f"Error writing NML file: {str(e)}")
+        raise
+
+def _read_rekordbox_xml(self, file_path):
+    """Read tracks from Rekordbox XML file"""
+    # Basic implementation - would need to be expanded
+    try:
+        import xml.etree.ElementTree as ET
+        
+        tree = ET.parse(file_path)
+        root = tree.getroot()
+        
+        tracks = []
+        collection = root.find("COLLECTION")
+        if collection is not None:
+            for track_elem in collection.findall("TRACK"):
+                try:
+                    location = track_elem.get("Location", "")
+                    # Convert from file://localhost/ format
+                    if location.startswith("file://localhost/"):
+                        file_path = location[16:]
+                    else:
+                        file_path = location
+                    
+                    if os.path.exists(file_path) and self.is_music_file(file_path):
+                        track = Track(file_path)
+                        # Add additional metadata from Rekordbox
+                        track.title = track_elem.get("Name", "")
+                        track.artist = track_elem.get("Artist", "")
+                        track.genre = track_elem.get("Genre", "")
+                        track.bpm = float(track_elem.get("AverageBpm", "0")) or None
+                        track.key = track_elem.get("Tonality", "")
+                        
+                        # Process cue points
+                        cue_points = []
+                        for mark in track_elem.findall("POSITION_MARK"):
+                            cue_type = int(mark.get("Type", "0"))
+                            start = float(mark.get("Start", "0"))
+                            name = mark.get("Name", "")
+                            
+                            cue_points.append({
+                                "type": cue_type,
+                                "start": start,
+                                "name": name
+                            })
+                        
+                        track.cue_points = cue_points
+                        tracks.append(track)
+                except Exception as e:
+                    logger.error(f"Error processing Rekordbox track: {str(e)}")
+        
+        return tracks
+    except Exception as e:
+        logger.error(f"Error reading Rekordbox XML: {str(e)}")
+        raise
+
+def _write_rekordbox_xml(self, file_path, tracks):
+    """Write tracks to Rekordbox XML format"""
+    try:
+        # If we have an NML file to convert directly
+        if len(tracks) > 0 and hasattr(tracks[0], 'source_nml'):
+            # Use the converter directly
+            converter = NMLToRekordboxConverter()
+            converter.convert_nml_to_rekordbox(tracks[0].source_nml, file_path)
+            return
+        
+        # Otherwise create a temporary NML and convert it
+        temp_nml = os.path.join(os.path.dirname(file_path), "temp_conversion.nml")
+        self._write_nml_file(temp_nml, tracks)
+        
+        # Use the converter
+        converter = NMLToRekordboxConverter()
+        converter.convert_nml_to_rekordbox(temp_nml, file_path)
+        
+        # Clean up temp file
+        if os.path.exists(temp_nml):
+            os.remove(temp_nml)
+    except Exception as e:
+        logger.error(f"Error writing Rekordbox XML: {str(e)}")
+        raise
+
+def _read_serato_csv(self, file_path):
+    """Read tracks from Serato CSV file"""
+    try:
+        import csv
+        
+        tracks = []
+        with open(file_path, 'r', encoding='utf-8') as csvfile:
+            reader = csv.DictReader(csvfile)
+            for row in reader:
+                try:
+                    file_path = row.get('Location', '')
+                    if os.path.exists(file_path) and self.is_music_file(file_path):
+                        track = Track(file_path)
+                        # Add metadata from CSV
+                        track.title = row.get('Title', '')
+                        track.artist = row.get('Artist', '')
+                        track.genre = row.get('Genre', '')
+                        track.bpm = float(row.get('BPM', '0')) or None
+                        track.key = row.get('Key', '')
+                        
+                        tracks.append(track)
+                except Exception as e:
+                    logger.error(f"Error processing Serato track: {str(e)}")
+        
+        return tracks
+    except Exception as e:
+        logger.error(f"Error reading Serato CSV: {str(e)}")
+        raise
+
+def _write_serato_csv(self, file_path, tracks):
+    """Write tracks to Serato CSV file"""
+    try:
+        import csv
+        
+        with open(file_path, 'w', newline='', encoding='utf-8') as csvfile:
+            fieldnames = ['Title', 'Artist', 'Album', 'Genre', 'BPM', 'Key', 'Location']
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            
+            writer.writeheader()
+            for track in tracks:
+                writer.writerow({
+                    'Title': track.title or '',
+                    'Artist': track.artist or '',
+                    'Album': '',  # We don't store album info
+                    'Genre': track.genre or '',
+                    'BPM': str(track.bpm) if track.bpm else '',
+                    'Key': track.key or '',
+                    'Location': track.file_path or ''
+                })
+    except Exception as e:
+        logger.error(f"Error writing Serato CSV: {str(e)}")
+        raise

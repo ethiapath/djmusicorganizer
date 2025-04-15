@@ -4,7 +4,8 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                            QHBoxLayout, QPushButton, QLabel, QFileDialog,
                            QTableWidget, QTableWidgetItem, QComboBox,
                            QSpinBox, QLineEdit, QMessageBox, QInputDialog,
-                           QProgressDialog, QHeaderView, QMenu, QToolTip)
+                           QProgressDialog, QHeaderView, QMenu, QToolTip,
+                           QDialog, QRadioButton, QGroupBox, QFormLayout)
 from PyQt6.QtCore import Qt, QSize, QPoint, QTime, QTimer, QThread, pyqtSignal
 from PyQt6.QtGui import QIcon, QFont, QColor
 import os
@@ -72,6 +73,11 @@ class DJMusicOrganizer(QMainWindow):
         remove_corrupted_btn = QPushButton("Remove Corrupted Files")
         remove_corrupted_btn.clicked.connect(self.remove_corrupted_files)
         toolbar.addWidget(remove_corrupted_btn)
+        
+        # Format migration button
+        migrate_btn = QPushButton("Format Migration")
+        migrate_btn.clicked.connect(self.migrate_formats)
+        toolbar.addWidget(migrate_btn)
         
         # Filter controls
         filter_layout = QHBoxLayout()
@@ -216,36 +222,6 @@ class DJMusicOrganizer(QMainWindow):
                 else:
                     self.progress_dialog.setLabelText(f"{operation_text}\nElapsed time: {elapsed_str}")
     
-    # Add ScannerThread class before DJMusicOrganizer class (around line 25)
-    class ScannerThread(QThread):
-        progress_updated = pyqtSignal(int, str, int, int)
-        finished = pyqtSignal(list)
-        error_occurred = pyqtSignal(Exception)
-        
-        def __init__(self, scanner):
-            super().__init__()
-            self.scanner = scanner
-            self._is_running = True
-            
-        def run(self):
-            try:
-                result = []
-                if self._is_running:
-                    self.scanner.scan(progress_callback=self._progress_wrapper, 
-                                    result_collector=result)
-                self.finished.emit(result[0] if result else [])
-            except Exception as e:
-                self.error_occurred.emit(e)
-                
-            def _progress_wrapper(self, value, message, current, total):
-                if self._is_running:
-                    self.progress_updated.emit(value, message, current, total)
-                    
-            def cancel(self):
-                self._is_running = False
-                self.scanner.cancel_scan()
-    
-    # Remove the duplicate import and class definition from inside DJMusicOrganizer class (around line 219-242)
     def scan_music(self):
         # Replace existing scan logic with:
         if not self.music_scanner.folders:
@@ -437,7 +413,7 @@ class DJMusicOrganizer(QMainWindow):
             self.all_tracks = [t for t in self.all_tracks if not t.is_corrupt]
             self.update_music_table(self.all_tracks)
             self.statusBar().showMessage(f"Removed {len(corrupted_tracks)} corrupted files")
-            
+    
     def show_context_menu(self, position):
         """Show context menu for track items"""
         menu = QMenu()
@@ -764,11 +740,208 @@ class DJMusicOrganizer(QMainWindow):
             # This is critical to keep the UI responsive
             QApplication.processEvents()  # Ensure UI updates
 
+    # Add to imports at the top if not already there
+    # from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
+    # Add this class before DJMusicOrganizer
+    class FormatMigrationDialog(QDialog):
+        def __init__(self, parent=None):
+            super().__init__(parent)
+            self.setWindowTitle("Format Migration")
+            self.setMinimumWidth(500)
+            
+            layout = QVBoxLayout(self)
+            
+            # Source format selection
+            source_group = QGroupBox("Source Format")
+            source_layout = QVBoxLayout()
+            
+            self.source_nml = QRadioButton("Traktor (NML)")
+            self.source_xml = QRadioButton("Rekordbox (XML)")
+            self.source_csv = QRadioButton("Serato (CSV)")
+            self.source_nml.setChecked(True)
+            
+            source_layout.addWidget(self.source_nml)
+            source_layout.addWidget(self.source_xml)
+            source_layout.addWidget(self.source_csv)
+            source_group.setLayout(source_layout)
+            layout.addWidget(source_group)
+            
+            # Target format selection
+            target_group = QGroupBox("Target Format")
+            target_layout = QVBoxLayout()
+            
+            self.target_nml = QRadioButton("Traktor (NML)")
+            self.target_xml = QRadioButton("Rekordbox (XML)")
+            self.target_csv = QRadioButton("Serato (CSV)")
+            self.target_xml.setChecked(True)
+            
+            target_layout.addWidget(self.target_nml)
+            target_layout.addWidget(self.target_xml)
+            target_layout.addWidget(self.target_csv)
+            target_group.setLayout(target_layout)
+            layout.addWidget(target_group)
+            
+            # Options
+            options_group = QGroupBox("Migration Options")
+            options_layout = QFormLayout()
+            
+            self.preserve_cues = QComboBox()
+            self.preserve_cues.addItems(["Preserve all cue points", "Preserve only first 8 cues", "Skip cue points"])
+            
+            self.handle_missing = QComboBox()
+            self.handle_missing.addItems(["Skip missing files", "Include with warnings", "Attempt to locate"])
+            
+            options_layout.addRow("Cue Points:", self.preserve_cues)
+            options_layout.addRow("Missing Files:", self.handle_missing)
+            options_group.setLayout(options_layout)
+            layout.addWidget(options_group)
+            
+            # Buttons
+            button_layout = QHBoxLayout()
+            self.migrate_btn = QPushButton("Start Migration")
+            self.cancel_btn = QPushButton("Cancel")
+            
+            self.migrate_btn.clicked.connect(self.accept)
+            self.cancel_btn.clicked.connect(self.reject)
+            
+            button_layout.addWidget(self.migrate_btn)
+            button_layout.addWidget(self.cancel_btn)
+            layout.addLayout(button_layout)
+        
+        def get_source_format(self):
+            if self.source_nml.isChecked():
+                return "nml"
+            elif self.source_xml.isChecked():
+                return "xml"
+            elif self.source_csv.isChecked():
+                return "csv"
+            return "nml"  # Default
+        
+        def get_target_format(self):
+            if self.target_nml.isChecked():
+                return "nml"
+            elif self.target_xml.isChecked():
+                return "xml"
+            elif self.target_csv.isChecked():
+                return "csv"
+            return "xml"  # Default
+        
+        def get_options(self):
+            return {
+                "preserve_cues": self.preserve_cues.currentText(),
+                "handle_missing": self.handle_missing.currentText()
+            }
+
+    # Add this method to DJMusicOrganizer class after the _update_progress method
+    def migrate_formats(self):
+        """Migrate between different DJ software formats"""
+        dialog = FormatMigrationDialog(self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        
+        source_format = dialog.get_source_format()
+        target_format = dialog.get_target_format()
+        options = dialog.get_options()
+        
+        if source_format == target_format:
+            QMessageBox.warning(self, "Invalid Selection", "Source and target formats must be different")
+            return
+        
+        # Get source file
+        source_extensions = {"nml": "Traktor Files (*.nml)", 
+        "xml": "Rekordbox Files (*.xml)",
+        "csv": "Serato Files (*.csv)"}
+        
+        source_file, _ = QFileDialog.getOpenFileName(
+            self, f"Select {source_format.upper()} Source File", "", 
+            source_extensions.get(source_format, "All Files (*)")
+        )
+        
+        if not source_file:
+            return
+        
+        # Get target file
+        target_extensions = {"nml": "nml", "xml": "xml", "csv": "csv"}
+        target_file, _ = QFileDialog.getSaveFileName(
+        self, f"Save {target_format.upper()} Target File", "",
+            f"{target_format.upper()} Files (*.{target_extensions.get(target_format)})"
+        )
+        
+        if not target_file:
+            return
+        
+        try:
+            # Create progress dialog
+            self.progress_dialog = QProgressDialog(f"Migrating from {source_format} to {target_format}...", 
+            "Cancel", 0, 100, self)
+            self.progress_dialog.setWindowTitle("Format Migration")
+            self.progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
+            self.progress_dialog.setValue(0)
+            self.progress_dialog.show()
+            
+            # Start timer for elapsed time display
+            self.scan_start_time = time.time()
+            self.timer.start(1000)
+            
+            # Perform the migration
+            self.music_scanner.migrate_format(
+            source_file, target_file, 
+            source_format, target_format,
+            options,
+            progress_callback=self._update_progress
+            )
+            
+            # Cleanup
+            self.timer.stop()
+            if self.progress_dialog:
+                self.progress_dialog.close()
+                self.progress_dialog = None
+                
+                QMessageBox.information(
+                self, "Migration Complete", 
+                f"Successfully migrated from {source_format.upper()} to {target_format.upper()}"
+                )
+        
+        except Exception as e:
+            self.timer.stop()
+            if self.progress_dialog:
+                self.progress_dialog.close()
+                self.progress_dialog = None
+                self.show_error("Migration Error", str(e))
+
+# Move ScannerThread class outside of DJMusicOrganizer
+# Place it after the imports and before DJMusicOrganizer class
+class ScannerThread(QThread):
+    progress_updated = pyqtSignal(int, str, int, int)
+    finished = pyqtSignal(list)
+    error_occurred = pyqtSignal(Exception)
+    
+    def __init__(self, scanner):
+        super().__init__()
+        self.scanner = scanner
+        self._is_running = True
+        
+    def run(self):
+        try:
+            result = []
+            if self._is_running:
+                self.scanner.scan(progress_callback=self._progress_wrapper, 
+                                result_collector=result)
+            self.finished.emit(result[0] if result else [])
+        except Exception as e:
+            self.error_occurred.emit(e)
+    
+    def _progress_wrapper(self, value, message, current, total):
+        if self._is_running:
+            self.progress_updated.emit(value, message, current, total)
+            
+    def cancel(self):
+        self._is_running = False
+        self.scanner.cancel_scan()
+
+# Add this code to run the application
 if __name__ == "__main__":
-    logger.info("Application starting")
     app = QApplication(sys.argv)
     window = DJMusicOrganizer()
-    logger.info("Main window created, showing UI")
     window.show()
-    logger.info("Entering main application loop")
     sys.exit(app.exec())
