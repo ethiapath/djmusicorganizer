@@ -5,7 +5,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                            QTableWidget, QTableWidgetItem, QComboBox,
                            QSpinBox, QLineEdit, QMessageBox, QInputDialog,
                            QProgressDialog, QHeaderView, QMenu, QToolTip,
-                           QDialog, QRadioButton, QGroupBox, QFormLayout, QSlider)
+                           QDialog, QRadioButton, QGroupBox, QFormLayout, QSlider, QSizePolicy)
 from PyQt6.QtCore import Qt, QSize, QPoint, QTime, QTimer, QThread, pyqtSignal
 from PyQt6.QtGui import QIcon, QFont, QColor
 import os
@@ -13,6 +13,7 @@ import traceback
 import time
 from music_scanner import MusicScanner
 from music_player import MusicPlayer
+from waveform_widget import WaveformWidget
 
 # Configure logging
 logging.basicConfig(
@@ -307,6 +308,13 @@ class DJMusicOrganizer(QMainWindow):
         self.now_playing_label = QLabel("Not Playing")
         player_controls.addWidget(self.now_playing_label)
         
+        # Add waveform widget
+        self.waveform_widget = WaveformWidget()
+        self.waveform_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.waveform_widget.setFixedHeight(100)
+        self.waveform_widget.position_changed.connect(self.set_position_from_waveform)
+        player_controls.addWidget(self.waveform_widget)
+        
         # Add playback progress slider
         self.time_slider = QSlider(Qt.Orientation.Horizontal)
         self.time_slider.setRange(0, 100)
@@ -334,7 +342,10 @@ class DJMusicOrganizer(QMainWindow):
         player_controls.addWidget(QLabel("Volume:"))
         player_controls.addWidget(self.volume_slider)
         
-        layout.addLayout(player_controls)
+        # Create a dedicated container for the player controls
+        player_control_widget = QWidget()
+        player_control_widget.setLayout(player_controls)
+        layout.addWidget(player_control_widget)
         
         # Status bar
         self.statusBar().showMessage("Ready")
@@ -350,7 +361,7 @@ class DJMusicOrganizer(QMainWindow):
         
         # Add playback timer for updating slider
         self.playback_timer = QTimer()
-        self.playback_timer.setInterval(1000)  # Update every second
+        self.playback_timer.setInterval(50)  # Update more frequently (50ms) for smoother playhead movement
         self.playback_timer.timeout.connect(self.update_playback_position)
         self.slider_being_dragged = False
         
@@ -657,6 +668,9 @@ class DJMusicOrganizer(QMainWindow):
             # Update now playing label
             self.now_playing_label.setText(f"Now Playing: {track.title} - {track.artist}")
             
+            # Load the audio file in the waveform widget
+            self.waveform_widget.load_audio(track.file_path)
+            
             # Enable and setup the slider
             self.time_slider.setEnabled(True)
             self.time_slider.setValue(0)
@@ -664,7 +678,7 @@ class DJMusicOrganizer(QMainWindow):
             # Get track duration from the music player and update the total time label
             duration = self.music_player.get_duration()
             if duration > 0:
-                self.time_slider.setRange(0, duration)
+                self.time_slider.setRange(0, int(duration) * 1000)  # Convert to milliseconds
                 minutes, seconds = divmod(duration, 60)
                 self.total_time_label.setText(f"{int(minutes)}:{int(seconds):02d}")
             else:
@@ -684,15 +698,20 @@ class DJMusicOrganizer(QMainWindow):
             
         try:
             position = self.music_player.get_position()
+            position_ms = int(position * 1000)  # Convert to milliseconds
+            
             if position >= 0:
-                self.time_slider.setValue(int(position))
+                self.time_slider.setValue(position_ms)
+                
+                # Update waveform position
+                self.waveform_widget.set_position(position_ms)
                 
                 # Update current time label
                 minutes, seconds = divmod(position, 60)
                 self.current_time_label.setText(f"{int(minutes)}:{int(seconds):02d}")
                 
                 # Check if the track has ended
-                if position >= self.time_slider.maximum():
+                if position >= self.music_player.get_duration():
                     self.stop_playback()
                     
         except Exception as e:
@@ -705,18 +724,24 @@ class DJMusicOrganizer(QMainWindow):
     def slider_released(self):
         """Called when the user stops dragging the slider"""
         try:
-            position = self.time_slider.value()
-            self.music_player.set_position(position)
+            position_ms = self.time_slider.value()
+            position_seconds = position_ms / 1000.0
+            
+            # Update waveform position
+            self.waveform_widget.set_position(position_ms)
+            
+            # Set player position
+            self.music_player.set_position(position_seconds)
             
             # Update current time label
-            minutes, seconds = divmod(position, 60)
+            minutes, seconds = divmod(position_seconds, 60)
             self.current_time_label.setText(f"{int(minutes)}:{int(seconds):02d}")
             
         except Exception as e:
             self.show_error("Error setting playback position", str(e))
         finally:
             self.slider_being_dragged = False
-            
+    
     def slider_value_changed(self, value):
         """Update time display while slider is being dragged"""
         if self.slider_being_dragged:
@@ -923,6 +948,9 @@ class DJMusicOrganizer(QMainWindow):
             self.play_btn.setText("Play")
             self.current_track = None
             self.now_playing_label.setText("Not Playing")
+            
+            # Reset waveform
+            self.waveform_widget.set_position(0)
             
             # Reset and disable the slider
             self.time_slider.setValue(0)
@@ -1141,6 +1169,19 @@ class DJMusicOrganizer(QMainWindow):
                     self.progress_dialog.close()
                     self.progress_dialog = None
                 self.show_error("Error exporting M3U/M3U8 playlist", str(e))
+
+    def set_position_from_waveform(self, position_ms):
+        """Set the playback position from waveform click"""
+        if self.current_track:
+            position_seconds = position_ms / 1000.0
+            self.music_player.set_position(position_seconds)
+            
+            # Update time slider
+            self.time_slider.setValue(position_ms)
+            
+            # Update time label
+            minutes, seconds = divmod(position_seconds, 60)
+            self.current_time_label.setText(f"{int(minutes)}:{int(seconds):02d}")
 
 # Add this code to run the application
 if __name__ == "__main__":
